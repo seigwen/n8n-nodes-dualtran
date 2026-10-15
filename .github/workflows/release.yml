@@ -1,0 +1,36 @@
+name: Release
+
+# Publishes to npm with provenance — the prerequisite for n8n Cloud's
+# verified community nodes (plan 64 B4). Trigger: a GitHub release.
+# Needs: the repository public + an npm token (secret NPM_TOKEN) or npm
+# trusted publishing (OIDC) configured for this repo.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Publish to npm (with provenance)
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

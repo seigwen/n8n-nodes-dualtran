@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Tests (vitest — logic, static contract, bundled-core integration)
+        run: npm test
+      - name: Build (n8n-node build)
+        run: npm run build
+      - name: Lint (n8n-node lint)
+        run: npm run lint

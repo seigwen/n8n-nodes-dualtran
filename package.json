@@ -1,0 +1,70 @@
+{
+  "name": "n8n-nodes-dualtran",
+  "version": "0.1.0",
+  "description": "Translate text inside n8n workflows with Google or your own AI model (BYOK, 20+ providers).",
+  "license": "MIT",
+  "homepage": "https://github.com/seigwen/n8n-nodes-dualtran",
+  "keywords": [
+    "n8n-community-node-package",
+    "translation",
+    "translate",
+    "ai"
+  ],
+  "author": {
+    "name": "seigwen",
+    "email": "seigwen@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seigwen/n8n-nodes-dualtran.git"
+  },
+  "scripts": {
+    "sync-core": "node scripts/sync-core.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "verify": "npm test && npm run build && npm run lint"
+  },
+  "files": [
+    "dist",
+    "icons"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "strict": false,
+    "credentials": [
+      "dist/credentials/DualTranApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Dualtran/Dualtran.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "*",
+    "eslint": "9.39.4",
+    "prettier": "3.8.3",
+    "typescript": "5.9.3",
+    "vitest": "^0.34.6",
+    "@ai-sdk/anthropic": "^3.0.82",
+    "@ai-sdk/azure": "^3.0.71",
+    "@ai-sdk/cohere": "^3.0.38",
+    "@ai-sdk/deepinfra": "^2.0.54",
+    "@ai-sdk/deepseek": "^2.0.35",
+    "@ai-sdk/google": "^3.0.80",
+    "@ai-sdk/groq": "^3.0.41",
+    "@ai-sdk/mistral": "^3.0.39",
+    "@ai-sdk/openai": "^3.0.69",
+    "@ai-sdk/perplexity": "^3.0.35",
+    "@ai-sdk/togetherai": "^2.0.55",
+    "@ai-sdk/xai": "^3.0.93",
+    "ai": "^6.0.199",
+    "common-tags": "^1.8.2",
+    "eventsource-parser": "^1.0.0",
+    "dualtran": "file:vendor/dualtran-core.tgz",
+    "esbuild": "^0.28.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}
