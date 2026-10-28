@@ -51,3 +51,11 @@ the workflow running) or throws a node error with the item index.
 ## License
 
 MIT — the bundled `@dualtran/core` portion is MPL-2.0.
+
+## Languages
+
+The engine itself has no interface: strings this package exposes are MCP tool
+names/descriptions and parameter docs, which LLM clients and protocol tooling
+consume in English. Localising them would hurt discoverability, so they stay
+English by policy. Any future user-facing surface must follow the DualTran i18n
+standard (38 catalogues, `locales/<code>/messages.json`).
