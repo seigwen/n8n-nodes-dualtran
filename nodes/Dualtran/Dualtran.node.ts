@@ -6,16 +6,73 @@ import {
 	type ICredentialsDecrypted,
 	type IDataObject,
 	type IExecuteFunctions,
+	type ILoadOptionsFunctions,
 	type INodeExecutionData,
+	type INodePropertyOptions,
 	type INodeType,
 	type INodeTypeDescription,
 } from 'n8n-workflow';
 import * as coreNamespace from 'dualtran';
-import { runTranslate, type AiCredential, type CoreLike } from './translate';
+import {
+	catalogProviders,
+	languageOptions,
+	modelsForProvider,
+	providerApiBase,
+	resolveEndpoint,
+	runTranslate,
+	sourceLanguageOptions,
+	type AiCredential,
+	type CoreLike,
+} from './translate';
 
 // The core is inlined into dist at build time (scripts/build.mjs), so the
 // installed package has no runtime dependencies.
 const core = coreNamespace as unknown as CoreLike;
+
+/** Every user-facing label lives here (n8n has no node-UI i18n API — R5). */
+const TEXT = {
+	providerCustom: 'Custom…',
+	modelCustom: 'Custom model…',
+};
+
+/**
+ * Provider options: curated built-ins + the models.dev snapshot in ONE
+ * alphabetical list (catalog.json, alias twins deduped), `Custom…` last.
+ */
+function providerOptions(): INodePropertyOptions[] {
+	const curated = catalogProviders()
+		.slice()
+		.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }))
+		.map((provider) => ({
+			name: provider.name,
+			value: provider.id,
+			description: provider.api ? `API base: ${provider.api}` : 'API base from the core provider registry',
+		}));
+	return [
+		...curated,
+		{
+			name: TEXT.providerCustom,
+			value: 'custom',
+			description: 'OpenAI-compatible server: set the endpoint yourself',
+		},
+	];
+}
+
+/** Model options for one provider: snapshot models, `Custom model…` last. */
+function modelOptions(providerId: string): INodePropertyOptions[] {
+	return [
+		...modelsForProvider(providerId).map((model) => ({
+			name: model.label,
+			value: model.id,
+			...(model.reasoning?.length ? { description: `Reasoning: ${model.reasoning.join(', ')}` } : {}),
+		})),
+		{
+			name: TEXT.modelCustom,
+			value: 'custom',
+			description: 'Use a model ID that is not in the snapshot',
+		},
+	];
+}
 
 export class Dualtran implements INodeType {
 	description: INodeTypeDescription = {
@@ -89,16 +146,19 @@ export class Dualtran implements INodeType {
 			{
 				displayName: 'Target Language',
 				name: 'targetLanguage',
-				type: 'string',
+				type: 'options',
+				// 44 catalogues from facts/language-names.json, alphabetical by name.
+				options: languageOptions(),
 				default: 'en',
-				description: 'Language code to translate into (en, zh-CN, ja, …)',
+				description: 'Language to translate into',
 			},
 			{
 				displayName: 'Source Language',
 				name: 'sourceLanguage',
-				type: 'string',
+				type: 'options',
+				options: sourceLanguageOptions(),
 				default: 'auto',
-				description: 'Language the text is written in — "auto" detects it',
+				description: 'Language the text is written in; auto detects it',
 			},
 			{
 				displayName: 'Engine',
@@ -118,6 +178,62 @@ export class Dualtran implements INodeType {
 				],
 				default: 'google',
 			},
+			{
+				displayName: 'AI Provider',
+				name: 'aiProvider',
+				type: 'options',
+				// Curated built-ins + the models.dev snapshot: one alphabetical list.
+				options: providerOptions(),
+				default: 'openai',
+				displayOptions: { show: { engine: ['ai'] } },
+				description: 'Provider that answers the translation',
+			},
+			{
+				displayName: 'AI Model Name or ID',
+				name: 'aiModel',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getModels',
+					loadOptionsDependsOn: ['aiProvider'],
+				},
+				default: '',
+				displayOptions: { show: { engine: ['ai'] } },
+				description:
+					'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+			},
+			{
+				displayName: 'Endpoint',
+				name: 'endpoint',
+				type: 'string',
+				default: '',
+				displayOptions: { show: { engine: ['ai'] } },
+				description:
+					'Provider API base; leave empty to use the credential base URL or the provider default',
+			},
+			{
+				displayName: 'Reasoning',
+				name: 'reasoning',
+				type: 'options',
+				// Alphabetical, as n8n's option list lint requires; `lowest` is the default.
+				options: [
+					{ name: 'Extra High', value: 'xhigh', description: 'Very thorough reasoning' },
+					{ name: 'High', value: 'high', description: 'Thorough reasoning; slower' },
+					{ name: 'Low', value: 'low', description: 'Light reasoning' },
+					{
+						name: 'Lowest',
+						value: 'lowest',
+						description: 'Cheapest reasoning depth the model supports',
+					},
+					{ name: 'Max', value: 'max', description: 'The model maximum' },
+					{ name: 'Medium', value: 'medium', description: 'Balanced reasoning' },
+					{ name: 'Minimal', value: 'minimal', description: 'Very little reasoning' },
+					{ name: 'None', value: 'none', description: 'No reasoning tokens; fastest' },
+				],
+				default: 'lowest',
+				displayOptions: { show: { engine: ['ai'] } },
+				description:
+					'How much the model may reason before answering. Lowest resolves to the cheapest depth the model declares; models without reasoning get none.',
+			},
 		],
 	};
 
@@ -129,10 +245,31 @@ export class Dualtran implements INodeType {
 		const sourceLanguage = this.getNodeParameter('sourceLanguage', 0) as string;
 
 		let ai: AiCredential | null = null;
+		let reasoning = '';
 		if (engine === 'ai') {
+			const selectedProvider = String(this.getNodeParameter('aiProvider', 0, '') ?? '');
+			const selectedModel = String(this.getNodeParameter('aiModel', 0, '') ?? '');
+			const endpoint = String(this.getNodeParameter('endpoint', 0, '') ?? '');
+			reasoning = String(this.getNodeParameter('reasoning', 0, 'lowest') ?? 'lowest');
 			try {
 				const creds = (await this.getCredentials('dualtranApi')) as unknown as AiCredential;
-				ai = { provider: creds.provider, apiKey: creds.apiKey, model: creds.model, baseURL: creds.baseURL ?? '' };
+				// Node params win; the credential's provider/model stay as fallbacks
+				// so existing workflows keep working.
+				const provider = selectedProvider || String(creds.provider ?? 'openai');
+				const model = selectedModel || String(creds.model ?? '');
+				const resolvedEndpoint = resolveEndpoint({
+					endpoint,
+					credentialBaseURL: String(creds.baseURL ?? ''),
+					provider,
+					core,
+				});
+				ai = {
+					provider,
+					apiKey: creds.apiKey,
+					model,
+					baseURL: resolvedEndpoint,
+					api: providerApiBase(provider, core),
+				};
 			} catch {
 				ai = null; // runTranslate raises the actionable error
 			}
@@ -146,7 +283,17 @@ export class Dualtran implements INodeType {
 					const text = this.getNodeParameter('text', i) as string;
 					const result = await runTranslate({
 						core,
-						params: { texts: [text], targetLanguage, sourceLanguage, engine, ai },
+						params: {
+							texts: [text],
+							targetLanguage,
+							sourceLanguage,
+							engine,
+							ai,
+							reasoning,
+							onError: (error) => {
+								throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
+							},
+						},
 					});
 					returnData.push({
 						json: { translation: result.translations[0] ?? '', targetLanguage: result.targetLanguage },
@@ -162,6 +309,10 @@ export class Dualtran implements INodeType {
 							sourceLanguage,
 							engine,
 							ai,
+							reasoning,
+							onError: (error) => {
+								throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
+							},
 						},
 					});
 					returnData.push({
@@ -185,6 +336,16 @@ export class Dualtran implements INodeType {
 	}
 
 	methods = {
+		loadOptions: {
+			/**
+			 * Model picker: the snapshot models of the provider selected on the node,
+			 * with `Custom model…` last so an unlisted id stays reachable.
+			 */
+			async getModels(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const providerId = String(this.getNodeParameter('aiProvider') ?? 'openai');
+				return modelOptions(providerId);
+			},
+		},
 		credentialTest: {
 			/**
 			 * The credential's Test button: make one tiny real request through the

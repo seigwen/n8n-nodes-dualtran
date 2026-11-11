@@ -1,0 +1,9 @@
+{
+ "google-gemini": "google",
+ "moonshot": "moonshotai",
+ "grok": "xai",
+ "zhipu": "zhipuai",
+ "qwen": "alibaba-cn",
+ "together": "togetherai",
+ "azure-openai": "azure"
+}
