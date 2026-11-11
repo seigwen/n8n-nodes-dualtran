@@ -20,11 +20,16 @@
   },
   "scripts": {
     "sync-core": "node scripts/sync-core.mjs",
-    "build": "node scripts/build.mjs",
+    "catalog": "node scripts/gen-catalog.mjs",
+    "build": "npm run catalog && node scripts/build.mjs",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "conformance": "node scripts/conformance/run.mjs",
+    "conformance:local": "node scripts/conformance/run-conformance.mjs",
+    "conformance:red": "node scripts/conformance/red.mjs",
     "lint": "n8n-node lint",
     "lint:fix": "n8n-node lint --fix",
-    "verify": "npm test && npm run build && npm run lint"
+    "verify": "npm test && npm run build && npm run lint && npm run conformance"
   },
   "files": [
     "dist",

@@ -11,14 +11,6 @@ export class DualTranApi implements ICredentialType {
 
 	properties: INodeProperties[] = [
 		{
-			displayName: 'Provider',
-			name: 'provider',
-			type: 'string',
-			default: 'openai',
-			description:
-				'Provider id understood by DualTran (openai, anthropic, google, deepseek, mistral, groq, xai, …)',
-		},
-		{
 			displayName: 'API Key',
 			name: 'apiKey',
 			type: 'string',
@@ -27,18 +19,28 @@ export class DualTranApi implements ICredentialType {
 			description: 'Your own API key for the selected provider (BYOK)',
 		},
 		{
-			displayName: 'Model',
-			name: 'model',
-			type: 'string',
-			default: '',
-			description: 'Model id passed to the provider (e.g. gpt-4o-mini, claude-3-5-haiku-latest)',
-		},
-		{
 			displayName: 'Base URL',
 			name: 'baseURL',
 			type: 'string',
 			default: '',
-			description: 'Optional endpoint override (proxies, OpenAI-compatible servers)',
+			description:
+				'Optional endpoint override (proxies, OpenAI-compatible servers). The node Endpoint field, when set, wins',
+		},
+		{
+			displayName: 'Provider (Deprecated)',
+			name: 'provider',
+			type: 'string',
+			default: 'openai',
+			description:
+				'DEPRECATED — kept so existing workflows keep working. Set the provider on the node instead; this value is only used when the node provider is empty',
+		},
+		{
+			displayName: 'Model (Deprecated)',
+			name: 'model',
+			type: 'string',
+			default: '',
+			description:
+				'DEPRECATED — kept so existing workflows keep working. Set the model on the node instead; this value is only used when the node model is empty',
 		},
 	];
 }

@@ -18,5 +18,7 @@ jobs:
         run: npm test
       - name: Build (n8n-node build)
         run: npm run build
+      - name: Host conformance (SPEC v2)
+        run: npm run conformance
       - name: Lint (n8n-node lint)
         run: npm run lint

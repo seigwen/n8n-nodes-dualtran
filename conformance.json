@@ -1,0 +1,31 @@
+{
+	"spec": "2.0.0",
+	"host": "n8n-nodes-dualtran",
+	"payloadCommand": "node scripts/conformance/payload.mjs",
+	"static": {
+		"files": [
+			"nodes/Dualtran/Dualtran.node.ts",
+			"nodes/Dualtran/translate.ts",
+			"credentials/DualTranApi.credentials.ts",
+			"catalog.json"
+		],
+		"patterns": ["providerSeparator", "__separator__", "__more__", "More (models.dev)"]
+	},
+	"platformLimits": [
+		{
+			"rule": "R2",
+			"allowBuiltInOnly": false,
+			"catalogue": "static-snapshot",
+			"snapshot": "scripts/catalog-sources/models-dev-sample.json",
+			"refreshedAt": "build",
+			"refreshScript": "scripts/gen-catalog.mjs",
+			"note": "The n8n node UI has no runtime catalogue fetch: methods.loadOptions runs inside the n8n server, so the provider/model pickers read catalog.json, a models.dev snapshot regenerated at build time by `npm run catalog` (part of `npm run build`)."
+		},
+		{
+			"rule": "R5",
+			"locales": 38,
+			"i18n": "none",
+			"note": "n8n exposes no node-UI i18n API (node descriptions are English-only literals consumed by the editor). All user-facing strings therefore live in the INodeProperties `displayName`/`description`/`placeholder` fields of nodes/Dualtran/Dualtran.node.ts, in one place, ready for a future catalogue; the 44 target-language labels come from scripts/catalog-sources/language-names.json."
+		}
+	]
+}
