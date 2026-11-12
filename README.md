@@ -17,6 +17,15 @@ The Google engine needs no credentials. The **AI (BYOK)** engine uses the
 **DualTran API** credential (provider, API key, model, optional base URL) —
 your key, sent only to your provider.
 
+A fresh install starts with **no AI provider**: the AI Provider picker shows a
+disabled *Select a provider* row, the model picker stays empty, the endpoint
+stays empty (placeholder `https://`) and reasoning stays at its `lowest`
+default. Choosing a provider fills the endpoint with that provider's API base
+(a value you edit yourself is kept on later switches). Until a provider is
+chosen, running the node with the AI engine fails with
+*Choose an AI provider in settings before translating.* — nothing is sent to
+any provider, and there is no implicit OpenAI fallback.
+
 ## Install
 
 ### Self-hosted n8n

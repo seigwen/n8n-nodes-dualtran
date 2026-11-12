@@ -1,5 +1,5 @@
 /**
- * Conformance gate (SPEC 2.0.0) — kit + conformance.json + payload + checks.
+ * Conformance gate (SPEC 2.1.0) — kit + conformance.json + payload + checks.
  *
  * The payload is generated from the LIVE node class (description.properties and
  * methods.loadOptions.getModels), validated with the shared kit exactly like
@@ -183,6 +183,131 @@ describe('product rules through the live node description', () => {
 	});
 });
 
+describe('SPEC 2.1: the empty provider state', () => {
+	it('a fresh install defaults to no provider and no OpenAI fallback', () => {
+		const node = new Dualtran();
+		const aiProvider = node.description.properties.find((entry) => entry.name === 'aiProvider') as any;
+		expect(aiProvider.default).toBe('');
+		expect(payload.provider.current).toBe('');
+		expect(payload.provider.fallback).toBe('');
+		expect(payload['unconfigured'].provider.fallback).toBe('');
+	});
+
+	it('exposes the placeholder as provider.placeholder, never as a real option', () => {
+		expect(payload.provider.placeholder).toEqual({
+			value: '',
+			label: 'Select a provider',
+			disabled: true,
+			selected: true,
+		});
+		expect(payload.provider.options.some((option: any) => option.value === '')).toBe(false);
+		expect(payload.provider.options.some((option: any) => option.disabled)).toBe(false);
+		// The placeholder is not sorted into the list: real providers stay alphabetical and
+		// custom last, exactly as in the configured section.
+		expect(payload.provider.options.filter((option: any) => option.source !== 'custom').map((option: any) => option.label)).toEqual(
+			payload['configured'].provider.options.filter((option: any) => option.source !== 'custom').map((option: any) => option.label),
+		);
+		expect(payload.provider.options[payload.provider.options.length - 1].source).toBe('custom');
+		const node = new Dualtran();
+		const providerOptions = (node.description.properties.find((entry) => entry.name === 'aiProvider') as any).options as any[];
+		// The n8n options array does carry the placeholder — at the head, disabled, value "".
+		expect(providerOptions[0]).toMatchObject({ name: 'Select a provider', value: '', disabled: true });
+	});
+
+	it('disables the model and reasoning pickers but keeps the lowest sentinel', () => {
+		const unconfigured = payload['unconfigured'];
+		expect(unconfigured.model).toMatchObject({
+			disabled: true,
+			selectedProvider: '',
+			selectedModel: '',
+			options: [],
+		});
+		// The per-provider model lists are still loaded (the picker simply is not shown).
+		expect(Object.keys(payload.model.byProvider).length).toBeGreaterThan(0);
+		expect(Object.keys(payload.model.loadOptions).length).toBeGreaterThan(0);
+		expect(unconfigured.model.label).toBe('Select a provider first');
+		expect(unconfigured.reasoning.disabled).toBe(true);
+		expect(unconfigured.reasoning.default).toBe('lowest');
+		expect(unconfigured.reasoning.value).toBe('lowest');
+	});
+
+	it('keeps the endpoint empty with the bare https:// placeholder', () => {
+		const endpoint = payload['unconfigured'].endpoint;
+		expect(endpoint.current).toBe('');
+		expect(endpoint.placeholder).toBe('https://');
+		expect(endpoint.autofill).toMatchObject({
+			before: '',
+			after: 'https://api.anthropic.com/v1',
+			providerApi: 'https://api.anthropic.com/v1',
+			userEdited: 'https://proxy.example/v1',
+			afterSwitch: 'https://proxy.example/v1',
+		});
+	});
+
+	it('the empty state carries no OpenAI endpoint, model or provider', () => {
+		const unconfigured = payload['unconfigured'];
+		expect(unconfigured.endpoint.current).not.toContain('api.openai.com');
+		expect(unconfigured.endpoint.autofill.after).not.toContain('api.openai.com');
+		expect(unconfigured.model.options).toEqual([]);
+		expect(unconfigured.model.selectedModel).toBe('');
+		expect(unconfigured.provider.current).toBe('');
+		// The provider picker still offers OpenAI as a choice — it is just not preselectable
+		// through an empty default; only the *empty state* is free of it.
+		expect(JSON.stringify({ provider: unconfigured.provider.current, model: unconfigured.model.selectedModel, endpoint: unconfigured.endpoint.current, fallback: unconfigured.provider.fallback })).not.toContain('openai');
+	});
+
+	it('the configured state enables the pickers and fills the endpoint', () => {
+		const configured = payload['configured'];
+		expect(configured.provider.current).toBe('anthropic');
+		expect(configured.provider.placeholder.selected).toBe(false);
+		expect(configured.provider.fallback).toBe('anthropic');
+		expect(configured.model.disabled).toBe(false);
+		expect(configured.model.selectedProvider).toBe('anthropic');
+		expect(configured.endpoint.current).toBe('https://api.anthropic.com/v1');
+		expect(configured.reasoning.disabled).toBe(false);
+	});
+
+	it('R5: the three new strings are English literals, declared as one key set', () => {
+		const node = new Dualtran();
+		const declared = new Set(
+			node.description.properties
+				.flatMap((entry: any) => [entry.displayName, entry.description, entry.placeholder])
+				.filter((value: unknown): value is string => typeof value === 'string' && value.trim() !== ''),
+		);
+		// The three keys name the literal each one resolves to (English-only, no
+		// per-locale node files): the map is declared once for the whole key set.
+		expect(payload.i18n.specKeys).toEqual({
+			providerPlaceholder: 'Select a provider',
+			providerRequiredForModel: 'Select a provider first',
+			providerRequiredError: 'Choose an AI provider in settings before translating.',
+		});
+		for (const [key, literal] of Object.entries(payload.i18n.specKeys as Record<string, string>)) {
+			expect(key).toMatch(/^provider/);
+			// Each literal is a real field the editor renders.
+			expect(declared.has(literal)).toBe(true);
+			expect(payload.i18n.keys).toContain(literal);
+			expect(payload.i18n.used).toContain(literal);
+		}
+		const limit = (config.platformLimits ?? []).find((entry: any) => entry.rule === 'R5');
+		expect(limit?.i18n).toBe('none');
+		expect(limit?.note).toMatch(/no node-UI i18n API/i);
+		expect(limit?.englishLiterals).toEqual({
+			providerPlaceholder: 'Select a provider',
+			providerRequiredForModel: 'Select a provider first',
+			providerRequiredError: 'Choose an AI provider in settings before translating.',
+		});
+	});
+
+	it('no request path falls back to openai or the custom provider', () => {
+		for (const relative of ['nodes/Dualtran/Dualtran.node.ts', 'nodes/Dualtran/translate.ts']) {
+			const source = readFileSync(path.join(ROOT, relative), 'utf8');
+			expect(source).not.toMatch(/\|\|\s*['"]openai['"]/);
+			expect(source).not.toMatch(/\|\|\s*CUSTOM_PROVIDER/);
+			expect(source).not.toMatch(/\?\?\s*['"]openai['"]/);
+		}
+	});
+});
+
 describe('backwards compatibility', () => {
 	it('keeps the credential provider/model fields as deprecated fallbacks', () => {
 		const source = readFileSync(path.join(ROOT, 'credentials/DualTranApi.credentials.ts'), 'utf8');
@@ -191,5 +316,9 @@ describe('backwards compatibility', () => {
 			expect(source).toContain(`name: '${field}'`);
 		}
 		expect(source.match(/DEPRECATED/g)).toHaveLength(2);
+		// SPEC 2.1 rule 5: the deprecated provider field carries no OpenAI preset
+		// and is never a fallback for an unconfigured node.
+		expect(source).not.toMatch(/default:\s*'openai'/);
+		expect(source).not.toMatch(/only used when the node provider is empty/);
 	});
 });

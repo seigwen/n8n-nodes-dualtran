@@ -1,5 +1,5 @@
 /**
- * Conformance payload for n8n-nodes-dualtran (SPEC 2.0.0).
+ * Conformance payload for n8n-nodes-dualtran (SPEC 2.1.0).
  *
  * Reads the node's REAL settings surface — `description.properties` of the
  * Dualtran node class plus the catalogue the pickers are generated from — and
@@ -17,7 +17,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const SPEC_VERSION = '2.0.0';
+export const SPEC_VERSION = '2.1.0';
 export const HOST = 'n8n-nodes-dualtran';
 
 const require = createRequire(import.meta.url);
@@ -96,11 +96,84 @@ export async function buildPayload(): Promise<any> {
 	};
 
 	// ── R2: one alphabetical provider list + per-provider model lists ───────
+	// SPEC 2.1: the options array really rendered by n8n starts with the empty,
+	// disabled `Select a provider` row. It is the placeholder, not a provider:
+	// it is lifted out of `options` so real providers stay one sorted list.
 	const providerProperty = must(properties, 'aiProvider');
-	const providerOptions = (providerProperty.options ?? []).map((option: any) => ({
-		...asOption(option),
-		source: /^custom/i.test(valueOf(option)) ? 'custom' : option.builtIn ? 'built-in' : 'models.dev',
-	}));
+	const renderedOptions = (providerProperty.options ?? []) as any[];
+	const placeholderOption = renderedOptions.find((option) => valueOf(option) === '');
+	if (!placeholderOption) {
+		throw new Error('the aiProvider options carry no empty placeholder row (SPEC 2.1)');
+	}
+	const asProviderOption = (option: any) => {
+		const entry = providers.find((provider) => provider.id === valueOf(option));
+		return {
+			...asOption(option),
+			source: String(valueOf(option)) === 'custom' ? 'custom' : entry?.builtIn ? 'built-in' : 'models.dev',
+		};
+	};
+	const providerOptions = renderedOptions
+		.filter((option) => valueOf(option) !== '')
+		.map(asProviderOption);
+
+	// The two states of the AI section, both taken from the real state helpers
+	// (nodes/Dualtran/translate.ts) — never from a hand-written fixture.
+	const { defaultAiSettings, applyProviderChoice, providerApiBase } = (await import(
+		pathToFileURL(path.join(ROOT, 'nodes/Dualtran/translate.ts')).href
+	)) as typeof import('../../nodes/Dualtran/translate');
+
+	const loadModels = async (providerId: string) => {
+		const method = node.methods?.loadOptions?.[must(properties, 'aiModel').typeOptions?.loadOptionsMethod ?? ''];
+		if (typeof method !== 'function') return [];
+		const options = await method.call({
+			getNodeParameter: (name: string) => (name === 'aiProvider' ? providerId : ''),
+		});
+		return (options ?? []).map(asOption);
+	};
+
+	/** The AI settings state plus the pickers' rendered surface, for one state. */
+	const describeState = async (state: ReturnType<typeof defaultAiSettings>) => {
+		const unconfigured = state.aiProvider === '';
+		return {
+			aiProvider: state.aiProvider,
+			aiModel: state.aiModel,
+			provider: {
+				current: state.aiProvider,
+				placeholder: {
+					value: valueOf(placeholderOption),
+					label: labelOf(placeholderOption),
+					disabled: placeholderOption.disabled === true,
+					selected: unconfigured,
+				},
+				// No fallback provider while unconfigured (SPEC 2.1 rule 5).
+				fallback: unconfigured ? '' : state.aiProvider,
+				options: providerOptions,
+			},
+			model: {
+				disabled: state.model.disabled,
+				label: state.model.label,
+				selectedProvider: state.aiProvider,
+				selectedModel: state.aiModel,
+				options: await loadModels(state.aiProvider),
+			},
+			endpoint: {
+				control: controlOf(must(properties, 'endpoint'), 'select', 'text'),
+				current: state.endpoint.value,
+				placeholder: state.endpoint.placeholder,
+			},
+			reasoning: {
+				disabled: state.reasoning.disabled,
+				// Stored sentinel, unchanged by the empty state (SPEC 2.1 rule 3).
+				default: state.reasoning.value,
+				value: state.reasoning.value,
+			},
+		};
+	};
+
+	const emptyState = defaultAiSettings();
+	const configuredState = applyProviderChoice(emptyState, 'anthropic');
+	const unconfiguredState = await describeState(emptyState);
+	const configured = await describeState(configuredState);
 
 	const modelProperty = must(properties, 'aiModel');
 	const byProvider: Record<string, Array<{ value: string; label: string }>> = {};
@@ -127,32 +200,42 @@ export async function buildPayload(): Promise<any> {
 	const model = {
 		control: controlOf(modelProperty, 'select', 'text'),
 		loadOptionsMethod,
+		// Configured surface; `unconfigured` / `configured` below carry both states.
+		disabled: configured.model.disabled,
+		label: configured.model.label,
+		selectedProvider: configured.model.selectedProvider,
+		selectedModel: configured.model.selectedModel,
+		options: configured.model.options,
 		byProvider,
 		loadOptions,
-		selectedProvider: String(providerProperty.default ?? ''),
-		selectedModel: String(modelProperty.default ?? ''),
 		catalogProviders: providers.map((provider) => provider.id),
 	};
 
 	// ── R3: endpoint stays a text field, autofilled at execution ────────────
 	const endpointProperty = must(properties, 'endpoint');
 	const endpointDefault = String(endpointProperty.default ?? '');
-	/** The node's fill rule: node endpoint || credential baseURL || provider api. */
-	const fill = (providerId: string, userEndpoint = ''): string => {
-		const provider = providers.find((entry) => entry.id === providerId);
-		return String(userEndpoint || provider?.api || '');
+	const autofillProvider = configuredState.aiProvider;
+	const proxyEndpoint = 'https://proxy.example/v1';
+	// Rule 4 through the real helper: choosing a provider puts the API base into
+	// the endpoint VALUE; a user-edited endpoint survives the next switch.
+	const afterChoice = applyProviderChoice(defaultAiSettings(), autofillProvider);
+	const userEditedState = {
+		...afterChoice,
+		endpoint: { ...afterChoice.endpoint, value: proxyEndpoint },
 	};
-	const autofillProvider = providers[0]?.id ?? 'openai';
+	const afterSwitch = applyProviderChoice(userEditedState, 'openai', autofillProvider);
 	const endpoint = {
 		control: controlOf(endpointProperty, 'select', 'text'),
 		default: endpointDefault,
+		current: configured.endpoint.current,
+		placeholder: String(endpointProperty.placeholder ?? ''),
 		autofill: {
 			provider: autofillProvider,
-			providerApi: fill(autofillProvider),
-			before: endpointDefault,
-			after: fill(autofillProvider, endpointDefault),
-			userEdited: 'https://proxy.example/v1',
-			afterSwitch: fill(providers[1]?.id ?? autofillProvider, 'https://proxy.example/v1'),
+			providerApi: providerApiBase(autofillProvider),
+			before: defaultAiSettings().endpoint.value,
+			after: afterChoice.endpoint.value,
+			userEdited: proxyEndpoint,
+			afterSwitch: afterSwitch.endpoint.value,
 		},
 	};
 
@@ -176,6 +259,9 @@ export async function buildPayload(): Promise<any> {
 	const reasoning = {
 		control: controlOf(reasoningProperty, 'select', 'text'),
 		default: defaultReasoning,
+		disabled: configured.reasoning.disabled,
+		value: configured.reasoning.value,
+		unconfiguredDisabled: unconfiguredState.reasoning.disabled,
 		options: (reasoningProperty.options ?? []).map(asOption),
 		resolved: Object.fromEntries(
 			Object.entries(cases).map(([key, entries]) => [
@@ -200,33 +286,70 @@ export async function buildPayload(): Promise<any> {
 	const descriptionStrings = (description.properties ?? [])
 		.flatMap((property: any) => [property.displayName, property.description, property.placeholder])
 		.filter((value: unknown): value is string => typeof value === 'string' && value.trim() !== '');
-	const keys = [...new Set(descriptionStrings)];
+	// SPEC 2.1 keys: each symbolic key (`providerPlaceholder`…) maps to the English
+	// literal declared once in translate.ts. Those literals are rendered by the
+	// description, so the key set and the rendered field set still line up 1:1.
+	// `buildPayload` runs standalone (see the CLI tail below) and under the kit,
+	// which attaches conformance.json to the payload afterwards; read the
+	// declarations straight from the file so both paths see the same keys.
+	const configPath = path.join(ROOT, 'conformance.json');
+	const declared = require('node:fs').existsSync(configPath)
+		? (JSON.parse(require('node:fs').readFileSync(configPath, 'utf8')) as { platformLimits?: unknown[] })
+		: {};
+	const specLiterals = ((declared.platformLimits ?? []) as Array<{
+		rule: string;
+		englishLiterals?: Record<string, string>;
+	}>).find((limit) => limit.rule === 'R5')?.englishLiterals ?? {};
+	// The three SPEC 2.1 strings are rendered as real description fields, so the key
+	// set IS the rendered set (keys ↔ fields 1:1, every key used). Their symbolic
+	// names (`providerPlaceholder`…) are declared in conformance.json's R5
+	// englishLiterals, which is where the product names them.
+	const rendered = new Set(descriptionStrings);
+	const missing = Object.values(specLiterals).filter((literal) => !rendered.has(literal));
+	if (missing.length) {
+		throw new Error(`SPEC 2.1 literal(s) never rendered by the node description: ${missing.join(', ')}`);
+	}
 	const i18n = {
 		locales: (catalog.languages ?? []).map((entry) => entry.id),
-		keys,
-		used: keys,
+		keys: descriptionStrings,
+		used: descriptionStrings,
 		fields: descriptionStrings.length,
+		specKeys: specLiterals,
 	};
 
 	return {
 		spec: SPEC_VERSION,
 		host: HOST,
 		language,
+		// Top level = the state a fresh install renders (SPEC 2.1 default: "").
 		provider: {
 			control: controlOf(providerProperty, 'select', 'text'),
-			current: String(providerProperty.default ?? ''),
-			// `builtIn` comes from catalog.json: curated core providers vs snapshot rows.
-			options: (providerProperty.options ?? []).map((option: any) => {
-				const entry = providers.find((provider) => provider.id === valueOf(option));
-				return {
-					...asOption(option),
-					source: String(valueOf(option)) === 'custom' ? 'custom' : entry?.builtIn ? 'built-in' : 'models.dev',
-				};
-			}),
+			current: unconfiguredState.provider.current,
+			placeholder: unconfiguredState.provider.placeholder,
+			fallback: unconfiguredState.provider.fallback,
+			options: providerOptions,
 		},
-		model,
-		endpoint,
-		reasoning,
+		model: {
+			...model,
+			disabled: unconfiguredState.model.disabled,
+			label: unconfiguredState.model.label,
+			selectedProvider: unconfiguredState.model.selectedProvider,
+			selectedModel: unconfiguredState.model.selectedModel,
+			options: unconfiguredState.model.options,
+		},
+		endpoint: {
+			...endpoint,
+			current: unconfiguredState.endpoint.current,
+			// Both states are rendered from the same controls; the autofill proof
+			// is identical and travels with each state.
+			autofill: endpoint.autofill,
+		},
+		reasoning: { ...reasoning, disabled: unconfiguredState.reasoning.disabled },
+		unconfigured: {
+			...unconfiguredState,
+			endpoint: { ...unconfiguredState.endpoint, autofill: endpoint.autofill },
+		},
+		configured,
 		i18n,
 		static: { hits: [] },
 	};

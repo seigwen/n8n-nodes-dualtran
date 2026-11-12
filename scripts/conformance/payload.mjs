@@ -56,6 +56,6 @@ console.log(JSON.stringify(await payload.buildPayload()));
 export const buildPayload = async () => (await payloadModule()).buildPayload();
 export const readCatalog = async () => (await payloadModule()).readCatalog;
 export const loadNode = async () => (await payloadModule()).loadNode;
-export const SPEC_VERSION = '2.0.0';
+export const SPEC_VERSION = '2.1.0';
 export const HOST = 'n8n-nodes-dualtran';
 export default buildPayload;

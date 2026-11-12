@@ -50,11 +50,24 @@ describe('n8n package contract', () => {
 		expectType('endpoint', 'string');
 		expectType('reasoning', 'options');
 
-		expect((byName.get('aiProvider') as any).default).toBe('openai');
+		// SPEC 2.1: a fresh install has no AI provider until the user picks one.
+		expect((byName.get('aiProvider') as any).default).toBe('');
 		expect((byName.get('endpoint') as any).default).toBe('');
 		expect((byName.get('reasoning') as any).default).toBe('lowest');
 		expect((byName.get('aiModel') as any).default).toBe('');
 		expect((byName.get('targetLanguage') as any).default).toBe('en');
+		// The empty state is explicit: a disabled, selected placeholder row.
+		const providerOptions = (byName.get('aiProvider') as any).options as Array<any>;
+		expect(providerOptions[0]).toMatchObject({
+			name: 'Select a provider',
+			value: '',
+			disabled: true,
+		});
+		expect(providerOptions.filter((option) => option.value === '')).toHaveLength(1);
+		expect(node.description.properties.find((entry) => entry.name === 'endpoint') as any).toMatchObject({
+			default: '',
+			placeholder: 'https://',
+		});
 		// The model picker is loaded per provider, never hard-coded.
 		expect((byName.get('aiModel') as any).typeOptions.loadOptionsMethod).toBe('getModels');
 		expect(typeof node.methods.loadOptions.getModels).toBe('function');
