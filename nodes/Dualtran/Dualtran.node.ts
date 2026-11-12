@@ -14,9 +14,14 @@ import {
 } from 'n8n-workflow';
 import * as coreNamespace from 'dualtran';
 import {
+	EMPTY_PROVIDER,
+	ENDPOINT_PLACEHOLDER,
+	PROVIDER_PLACEHOLDER,
+	PROVIDER_REQUIRED_ERROR,
+	PROVIDER_REQUIRED_FOR_MODEL,
 	catalogProviders,
 	languageOptions,
-	modelsForProvider,
+	modelOptions,
 	providerApiBase,
 	resolveEndpoint,
 	runTranslate,
@@ -29,17 +34,31 @@ import {
 // installed package has no runtime dependencies.
 const core = coreNamespace as unknown as CoreLike;
 
-/** Every user-facing label lives here (n8n has no node-UI i18n API — R5). */
+/**
+ * Every user-facing label lives here (n8n has no node-UI i18n API — R5). The
+ * three AI-provider strings of SPEC 2.1 are English literals declared once in
+ * translate.ts and re-exported through the description fields below.
+ */
 const TEXT = {
 	providerCustom: 'Custom…',
-	modelCustom: 'Custom model…',
 };
 
+type ProviderOption = INodePropertyOptions & { disabled?: boolean };
+
 /**
- * Provider options: curated built-ins + the models.dev snapshot in ONE
- * alphabetical list (catalog.json, alias twins deduped), `Custom…` last.
+ * Provider options: a disabled, selected placeholder row for the empty state,
+ * then curated built-ins + the models.dev snapshot in ONE alphabetical list
+ * (catalog.json, alias twins deduped), `Custom…` last.
+ *
+ * The `value: ''` row is the placeholder the picker shows while `aiProvider`
+ * is empty — it is not a real provider, it is excluded from the sort and it
+ * stays disabled, so the user cannot return to the empty state once they have
+ * chosen (SPEC 2.1). The conformance payload exposes it as `provider.placeholder`.
+ *
+ * `disabled` is honoured by the editor but is not part of this n8n version's
+ * `INodePropertyOptions` type, so the empty row is typed through `ProviderOption`.
  */
-function providerOptions(): INodePropertyOptions[] {
+function providerOptions(): ProviderOption[] {
 	const curated = catalogProviders()
 		.slice()
 		.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }))
@@ -49,27 +68,17 @@ function providerOptions(): INodePropertyOptions[] {
 			description: provider.api ? `API base: ${provider.api}` : 'API base from the core provider registry',
 		}));
 	return [
+		{
+			name: PROVIDER_PLACEHOLDER,
+			value: EMPTY_PROVIDER,
+			disabled: true,
+			description: 'No AI provider is selected yet',
+		},
 		...curated,
 		{
 			name: TEXT.providerCustom,
 			value: 'custom',
 			description: 'OpenAI-compatible server: set the endpoint yourself',
-		},
-	];
-}
-
-/** Model options for one provider: snapshot models, `Custom model…` last. */
-function modelOptions(providerId: string): INodePropertyOptions[] {
-	return [
-		...modelsForProvider(providerId).map((model) => ({
-			name: model.label,
-			value: model.id,
-			...(model.reasoning?.length ? { description: `Reasoning: ${model.reasoning.join(', ')}` } : {}),
-		})),
-		{
-			name: TEXT.modelCustom,
-			value: 'custom',
-			description: 'Use a model ID that is not in the snapshot',
 		},
 	];
 }
@@ -182,13 +191,24 @@ export class Dualtran implements INodeType {
 				displayName: 'AI Provider',
 				name: 'aiProvider',
 				type: 'options',
-				// Curated built-ins + the models.dev snapshot: one alphabetical list.
+				// Curated built-ins + the models.dev snapshot: one alphabetical list,
+				// behind the disabled `Select a provider` placeholder row.
 				options: providerOptions(),
-				default: 'openai',
+				// SPEC 2.1: a fresh install has NO provider until the user chooses one.
+				// `required` + the placeholder make the empty state explicit rather than
+				// a silent OpenAI default (SPEC 2.1 rule 1).
+				default: '',
+				required: true,
+				// The placeholder the editor shows on the empty picker (SPEC 2.1 rule 2).
+				placeholder: PROVIDER_PLACEHOLDER,
+				// Rule 5: the picker (the node's primary AI setting) shows the very
+				// message a run raises while no provider is selected.
+				description: PROVIDER_REQUIRED_ERROR,
 				displayOptions: { show: { engine: ['ai'] } },
-				description: 'Provider that answers the translation',
 			},
 			{
+				// Empty and disabled until a provider is chosen: loadOptions.getModels
+				// returns [] for provider "" and n8n shows PROVIDER_REQUIRED_FOR_MODEL.
 				displayName: 'AI Model Name or ID',
 				name: 'aiModel',
 				type: 'options',
@@ -197,6 +217,9 @@ export class Dualtran implements INodeType {
 					loadOptionsDependsOn: ['aiProvider'],
 				},
 				default: '',
+				// SPEC 2.1 rule 3: the label n8n shows while the picker is empty —
+				// the provider-required message, not a stale model list.
+				placeholder: PROVIDER_REQUIRED_FOR_MODEL,
 				displayOptions: { show: { engine: ['ai'] } },
 				description:
 					'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
@@ -206,9 +229,14 @@ export class Dualtran implements INodeType {
 				name: 'endpoint',
 				type: 'string',
 				default: '',
+				// Value stays empty until a provider is chosen; the bare scheme is
+				// the placeholder, never a value (SPEC 2.1 rule 3).
+				placeholder: ENDPOINT_PLACEHOLDER,
 				displayOptions: { show: { engine: ['ai'] } },
+				// The empty state points at the fix; the provider API base lands in the
+				// VALUE once a provider is chosen (never in the placeholder).
 				description:
-					'Provider API base; leave empty to use the credential base URL or the provider default',
+					'Provider API base, filled in once you pick a provider; leave empty to use the credential base URL or the provider default',
 			},
 			{
 				displayName: 'Reasoning',
@@ -229,6 +257,7 @@ export class Dualtran implements INodeType {
 					{ name: 'Minimal', value: 'minimal', description: 'Very little reasoning' },
 					{ name: 'None', value: 'none', description: 'No reasoning tokens; fastest' },
 				],
+				// Disabled while no provider is selected; the stored sentinel stays `lowest`.
 				default: 'lowest',
 				displayOptions: { show: { engine: ['ai'] } },
 				description:
@@ -247,31 +276,40 @@ export class Dualtran implements INodeType {
 		let ai: AiCredential | null = null;
 		let reasoning = '';
 		if (engine === 'ai') {
-			const selectedProvider = String(this.getNodeParameter('aiProvider', 0, '') ?? '');
+			const selectedProvider = String(this.getNodeParameter('aiProvider', 0, '') ?? '').trim();
+			// SPEC 2.1: the node provider is the only provider source on the request
+			// path — no implicit OpenAI default. A node saved before 2.1 has its
+			// provider stored, so existing workflows keep working; an empty one is
+			// handed to runTranslate as the guarded empty state below (inside the
+			// item loop, so `Continue On Fail` reports it per item).
 			const selectedModel = String(this.getNodeParameter('aiModel', 0, '') ?? '');
 			const endpoint = String(this.getNodeParameter('endpoint', 0, '') ?? '');
 			reasoning = String(this.getNodeParameter('reasoning', 0, 'lowest') ?? 'lowest');
-			try {
-				const creds = (await this.getCredentials('dualtranApi')) as unknown as AiCredential;
-				// Node params win; the credential's provider/model stay as fallbacks
-				// so existing workflows keep working.
-				const provider = selectedProvider || String(creds.provider ?? 'openai');
-				const model = selectedModel || String(creds.model ?? '');
-				const resolvedEndpoint = resolveEndpoint({
-					endpoint,
-					credentialBaseURL: String(creds.baseURL ?? ''),
-					provider,
-					core,
-				});
-				ai = {
-					provider,
-					apiKey: creds.apiKey,
-					model,
-					baseURL: resolvedEndpoint,
-					api: providerApiBase(provider, core),
-				};
-			} catch {
-				ai = null; // runTranslate raises the actionable error
+			if (selectedProvider !== EMPTY_PROVIDER) {
+				try {
+					const creds = (await this.getCredentials('dualtranApi')) as unknown as AiCredential;
+					const provider = selectedProvider;
+					const model = selectedModel || String(creds.model ?? '');
+					const resolvedEndpoint = resolveEndpoint({
+						endpoint,
+						credentialBaseURL: String(creds.baseURL ?? ''),
+						provider,
+						core,
+					});
+					ai = {
+						provider,
+						apiKey: creds.apiKey,
+						model,
+						baseURL: resolvedEndpoint,
+						api: providerApiBase(provider, core),
+					};
+				} catch {
+					ai = null; // runTranslate raises the actionable error
+				}
+			} else {
+				// Unconfigured: keep what was stored, add nothing. runTranslate
+				// rejects it with PROVIDER_REQUIRED_ERROR before any request.
+				ai = { provider: EMPTY_PROVIDER, apiKey: '', model: selectedModel, baseURL: endpoint };
 			}
 		}
 
@@ -342,8 +380,10 @@ export class Dualtran implements INodeType {
 			 * with `Custom model…` last so an unlisted id stays reachable.
 			 */
 			async getModels(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const providerId = String(this.getNodeParameter('aiProvider') ?? 'openai');
-				return modelOptions(providerId);
+				// No provider yet (fresh install): no model list — the picker is
+				// disabled and labelled PROVIDER_REQUIRED_FOR_MODEL.
+				const providerId = String(this.getNodeParameter('aiProvider') ?? EMPTY_PROVIDER);
+				return modelOptions(providerId) as INodePropertyOptions[];
 			},
 		},
 		credentialTest: {
@@ -359,13 +399,21 @@ export class Dualtran implements INodeType {
 				if (!data.apiKey || data.apiKey.trim() === '') {
 					return { status: 'Error' as const, message: 'API key is empty.' };
 				}
+				if (!data.provider || data.provider.trim() === '') {
+					// SPEC 2.1: the deprecated credential provider field is only read
+					// when it is set — testing it must not silently probe OpenAI.
+					return {
+						status: 'Error' as const,
+						message: `${PROVIDER_REQUIRED_ERROR} The deprecated provider field on this credential is empty.`,
+					};
+				}
 				if (!data.model || data.model.trim() === '') {
 					return { status: 'Error' as const, message: 'Model is empty.' };
 				}
 				try {
 					let received = '';
 					const { totalChunks, streamError } = await core.streamChat({
-						provider: data.provider || 'openai',
+						provider: data.provider,
 						apiKey: data.apiKey,
 						model: data.model,
 						messages: [{ role: 'user', content: 'Reply with the single word: ok' }],

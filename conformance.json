@@ -1,5 +1,5 @@
 {
-	"spec": "2.0.0",
+	"spec": "2.1.0",
 	"host": "n8n-nodes-dualtran",
 	"payloadCommand": "node scripts/conformance/payload.mjs",
 	"static": {
@@ -25,7 +25,12 @@
 			"rule": "R5",
 			"locales": 38,
 			"i18n": "none",
-			"note": "n8n exposes no node-UI i18n API (node descriptions are English-only literals consumed by the editor). All user-facing strings therefore live in the INodeProperties `displayName`/`description`/`placeholder` fields of nodes/Dualtran/Dualtran.node.ts, in one place, ready for a future catalogue; the 44 target-language labels come from scripts/catalog-sources/language-names.json."
+			"note": "n8n exposes no node-UI i18n API: node descriptions are English-only literals consumed by the editor, and the editor's own locale catalogue covers n8n core strings, not community-node displayName/description/placeholder fields. SPEC 2.1's three provider-required strings therefore ship as English literals (providerPlaceholder, providerRequiredForModel, providerRequiredError) declared once in nodes/Dualtran/translate.ts and referenced from the node description fields, the endpoint placeholder and the request guard; there are no per-locale node files to translate and no legacy string to migrate. The 44 target-language labels come from scripts/catalog-sources/language-names.json.",
+			"englishLiterals": {
+				"providerPlaceholder": "Select a provider",
+				"providerRequiredForModel": "Select a provider first",
+				"providerRequiredError": "Choose an AI provider in settings before translating."
+			}
 		}
 	]
 }

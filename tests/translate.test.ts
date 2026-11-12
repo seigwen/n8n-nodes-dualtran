@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+	PROVIDER_REQUIRED_ERROR,
+	PROVIDER_REQUIRED_FOR_MODEL,
+	applyProviderChoice,
 	catalogProviders,
+	defaultAiSettings,
 	languageOptions,
+	modelOptions,
 	modelsForProvider,
+	providerApiBase,
 	resolveEndpoint,
 	resolveReasoningDepth,
 	resolveReasoningForModel,
@@ -76,9 +82,20 @@ describe('runTranslate — ai', () => {
 		expect((arg.messages as { role: string }[]).map((m) => m.role)).toEqual(['system', 'user', 'user']);
 	});
 
-	it('throws an actionable error without credentials', async () => {
+	it('raises the provider-required error without a credential (no provider is known)', async () => {
+		// SPEC 2.1 rule 5: the provider guard runs before the credential guard, so
+		// an AI entry with no configuration is told to choose a provider.
 		await expect(
 			runTranslate({ core: makeCore() as never, params: { ...baseParams, engine: 'ai', ai: null, texts: ['x'] } }),
+		).rejects.toThrow(PROVIDER_REQUIRED_ERROR);
+	});
+
+	it('raises the credential error once a provider is set but the key is missing', async () => {
+		await expect(
+			runTranslate({
+				core: makeCore() as never,
+				params: { ...baseParams, engine: 'ai', ai: { ...ai, apiKey: '' }, texts: ['x'] },
+			}),
 		).rejects.toThrow(/DualTran API credential/);
 	});
 
@@ -195,5 +212,97 @@ describe('catalogue helpers', () => {
 		expect(resolveReasoningDepth({ depth: 'lowest', reasoningOptions: [] })).toBe('');
 		expect(resolveReasoningForModel({ depth: 'lowest', providerId: 'openai', modelId: 'gpt-5.6-sol' })).toBe('none');
 		expect(resolveReasoningForModel({ depth: 'lowest', providerId: 'openai', modelId: 'missing-model' })).toBe('');
+	});
+});
+
+// ── SPEC 2.1: empty provider is an explicit, guarded state ──────────────────
+
+describe('runTranslate — no provider selected (SPEC 2.1)', () => {
+	it('rejects with providerRequiredError and sends no request', async () => {
+		const core = makeCore();
+		await expect(
+			runTranslate({
+				core: core as never,
+				params: {
+					...baseParams,
+					engine: 'ai',
+					texts: ['Hello', 'World'],
+					ai: { provider: '', apiKey: 'sk-test', model: 'gpt-4o', baseURL: '' },
+				},
+			}),
+		).rejects.toThrow(PROVIDER_REQUIRED_ERROR);
+		expect(core.streamChat).not.toHaveBeenCalled();
+		expect(core.translateGoogle).not.toHaveBeenCalled();
+	});
+
+	it('never falls back to the OpenAI endpoint, model or provider', async () => {
+		const core = makeCore({
+			streamChat: vi.fn(async () => ({ totalChunks: 1, streamError: null })),
+		});
+		await runTranslate({
+			core: core as never,
+			params: {
+				...baseParams,
+				engine: 'ai',
+				texts: ['Hi'],
+				ai: { provider: '', apiKey: 'sk-test', model: '', baseURL: '' },
+			},
+		}).catch(() => undefined);
+		const streamed = JSON.stringify(core.streamChat.mock.calls);
+		expect(streamed).not.toContain('openai');
+		expect(streamed).not.toContain('api.openai.com');
+		expect(streamed).not.toContain('gpt-');
+	});
+
+	it('keeps the empty-provider guard ahead of the credential guard', async () => {
+		// Both an absent `ai` and an explicitly empty provider raise the same
+		// provider-required error — the credential hint never masks it.
+		await expect(
+			runTranslate({ core: makeCore() as never, params: { ...baseParams, engine: 'ai', ai: null, texts: ['x'] } }),
+		).rejects.toThrow(PROVIDER_REQUIRED_ERROR);
+		await expect(
+			runTranslate({
+				core: makeCore() as never,
+				params: {
+					...baseParams,
+					engine: 'ai',
+					ai: { provider: '', apiKey: 'k', model: 'm', baseURL: '' },
+					texts: ['x'],
+				},
+			}),
+		).rejects.toThrow(PROVIDER_REQUIRED_ERROR);
+	});
+});
+
+describe('empty AI state (SPEC 2.1)', () => {
+	it('has no provider, model or endpoint until one is chosen', () => {
+		const settings = defaultAiSettings();
+		expect(settings.aiProvider).toBe('');
+		expect(settings.aiModel).toBe('');
+		expect(settings.endpoint).toEqual({ value: '', placeholder: 'https://' });
+		expect(settings.model).toMatchObject({ disabled: true, label: PROVIDER_REQUIRED_FOR_MODEL, options: [] });
+		expect(modelOptions('')).toEqual([]);
+	});
+
+	it('does not carry the OpenAI endpoint, model or provider in the empty state', () => {
+		const serialized = JSON.stringify(defaultAiSettings());
+		expect(serialized).not.toContain('openai');
+		expect(serialized).not.toContain('api.openai.com');
+		expect(serialized).not.toContain('gpt-');
+		expect(serialized).not.toContain('OpenAI');
+	});
+
+	it('fills the endpoint with the provider API base only after a provider is chosen', () => {
+		const empty = defaultAiSettings();
+		const chosen = applyProviderChoice(empty, 'anthropic');
+		expect(chosen.aiProvider).toBe('anthropic');
+		expect(chosen.endpoint.value).toBe(providerApiBase('anthropic'));
+		expect(chosen.endpoint.value).toBe('https://api.anthropic.com/v1');
+		expect(chosen.model.disabled).toBe(false);
+		expect(chosen.reasoning.disabled).toBe(false);
+		// The stored sentinel survives the transition.
+		expect(chosen.reasoning.value).toBe('lowest');
+		// Empty is not reachable again.
+		expect(applyProviderChoice(chosen, '')).toEqual(chosen);
 	});
 });

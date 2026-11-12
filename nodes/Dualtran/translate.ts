@@ -62,6 +62,83 @@ export interface TranslateOutcome {
 	targetLanguage: string;
 }
 
+// ── Localized strings (SPEC 2.1) ─────────────────────────────────────────────
+//
+// n8n has no node-UI i18n API (platform limit R5, conformance.json), so the
+// three AI-provider strings live here as English literals — one declaration,
+// referenced from the description fields, the endpoint/button guards and the
+// empty-state helpers. The `providerRequired*` messages are what the user reads
+// when the node runs unconfigured; `PROVIDER_PLACEHOLDER` labels the disabled
+// picker row of a fresh install.
+export const PROVIDER_PLACEHOLDER = 'Select a provider';
+export const PROVIDER_REQUIRED_FOR_MODEL = 'Select a provider first';
+export const PROVIDER_REQUIRED_ERROR = 'Choose an AI provider in settings before translating.';
+
+/** The provider id a fresh install carries: none until the user picks one. */
+export const EMPTY_PROVIDER = '';
+
+/** Placeholder of the endpoint field while no provider is selected. */
+export const ENDPOINT_PLACEHOLDER = 'https://';
+
+// ── AI settings state (the surface the node description renders) ─────────────
+
+export interface AiSettingsState {
+	/** Selected provider id ('' on a fresh install). */
+	aiProvider: string;
+	/** Selected model id ('' on a fresh install). */
+	aiModel: string;
+	/** Endpoint field: its value and the placeholder shown while it is empty. */
+	endpoint: { value: string; placeholder: string };
+	/** Model picker: empty and disabled until a provider is chosen. */
+	model: { disabled: boolean; label: string; value: string; options: CatalogModel[] };
+	/** Reasoning picker: disabled until a provider is chosen; sentinel unchanged. */
+	reasoning: { disabled: boolean; value: string };
+}
+
+/** A fresh/empty AI configuration: no provider, no model, no endpoint. */
+export function defaultAiSettings(): AiSettingsState {
+	return {
+		aiProvider: EMPTY_PROVIDER,
+		aiModel: '',
+		endpoint: { value: '', placeholder: ENDPOINT_PLACEHOLDER },
+		model: { disabled: true, label: PROVIDER_REQUIRED_FOR_MODEL, value: '', options: [] },
+		reasoning: { disabled: true, value: REASONING_LOWEST },
+	};
+}
+
+/**
+ * Choosing a provider: the endpoint VALUE becomes the provider API base, the
+ * model list loads, reasoning enables — and a user-edited endpoint is kept on
+ * every later switch. '' is not a choice (the placeholder is disabled), so the
+ * state cannot return to empty.
+ */
+export function applyProviderChoice(
+	state: AiSettingsState,
+	providerId: string,
+	previousProvider = state.aiProvider,
+): AiSettingsState {
+	const chosen = String(providerId ?? '').trim();
+	if (chosen === '') return state;
+	const userEdited = state.endpoint.value.trim() !== '' && state.endpoint.value !== providerApiBase(previousProvider);
+	return {
+		...state,
+		aiProvider: chosen,
+		endpoint: { value: userEdited ? state.endpoint.value : providerApiBase(chosen), placeholder: ENDPOINT_PLACEHOLDER },
+		model: {
+			disabled: false,
+			label: '',
+			value: state.model.value,
+			options: modelsForProvider(chosen),
+		},
+		reasoning: { ...state.reasoning, disabled: false },
+	};
+}
+
+/** True when the AI engine was left without a provider — the guarded state. */
+export function isProviderMissing(ai: { provider?: string } | null | undefined): boolean {
+	return String(ai?.provider ?? '').trim() === '';
+}
+
 // ── Catalogue (catalog.json, generated at build time) ────────────────────────
 
 export interface CatalogModel {
@@ -116,6 +193,29 @@ export function findProvider(providerId: string): CatalogProvider | undefined {
 /** Catalogue models for a provider ([] when the provider is unknown). */
 export function modelsForProvider(providerId: string): CatalogModel[] {
 	return findProvider(providerId)?.models ?? [];
+}
+
+/**
+ * Model picker options: the snapshot models of a chosen provider, sorted by
+ * label with the free-text `Custom model…` row last. No provider → no options
+ * (the picker is disabled and the user is told to pick a provider first).
+ */
+export function modelOptions(providerId: string): LanguageOption[] {
+	if (String(providerId ?? '').trim() === '') return [];
+	const models = modelsForProvider(providerId)
+		.slice()
+		.sort((a, b) => a.label.localeCompare(b.label, 'en', { numeric: true, sensitivity: 'base' }))
+		.map((model) => ({
+			name: model.label,
+			value: model.id,
+			description: model.reasoning?.length ? `Reasoning: ${model.reasoning.join(', ')}` : '',
+		}));
+	models.push({
+		name: 'Custom model…',
+		value: 'custom',
+		description: 'Use a model ID that is not in the snapshot',
+	});
+	return models;
 }
 /**
  * The endpoint a provider implies: its own catalogue `api`, falling back to the
@@ -294,17 +394,30 @@ export async function runTranslate({
 }): Promise<TranslateOutcome> {
 	const filtered = params.texts.map((text) => text.trim()).filter((text) => text.length > 0);
 	const onError = params.onError ?? rethrow;
+	// SPEC 2.1 rule 5, first thing on the AI path: an entry with no provider
+	// selected is an explicit error, never a silent OpenAI request. Checked
+	// before the credential, the model and the endpoint so the message names the
+	// real problem and no default can fill the gap — the node passes
+	// `ai: { provider: '' }` for its own empty state, and a caller that passes
+	// no `ai` at all still gets the provider-required error.
+	if (params.engine === 'ai' && (!params.ai || isProviderMissing(params.ai))) {
+		return onError(new Error(PROVIDER_REQUIRED_ERROR));
+	}
 	if (filtered.length === 0) {
 		return { translations: [], engine: params.engine, targetLanguage: params.targetLanguage };
 	}
 
 	if (params.engine === 'ai') {
-		if (!params.ai || !params.ai.apiKey) {
-			throw new Error(
-				'The AI engine needs the DualTran API credential (provider + API key). Select the credential on the node, or use the Google engine.',
+		// Narrowed by the guard above; `ai.provider` is the only provider source
+		// on this path — no implicit default provider of any kind.
+		const ai = params.ai as AiCredential;
+		if (!ai.apiKey) {
+			return onError(
+				new Error(
+					'The AI engine needs the DualTran API credential (provider + API key). Select the credential on the node, or use the Google engine.',
+				),
 			);
 		}
-		const ai = params.ai;
 		const reasoning = resolveReasoningForModel({
 			depth: params.reasoning,
 			providerId: ai.provider,

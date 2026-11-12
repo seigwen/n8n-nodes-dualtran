@@ -1,5 +1,5 @@
 /**
- * Conformance self-check (SPEC 2.0.0) — the `conformance.json` contract and the
+ * Conformance self-check (SPEC 2.1.0) — the `conformance.json` contract and the
  * live node description, checked in the same process the tests run in.
  *
  * The shared kit (`.conformance-kit/run.mjs`) validates the payload it gets from

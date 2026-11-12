@@ -30,9 +30,9 @@ export class DualTranApi implements ICredentialType {
 			displayName: 'Provider (Deprecated)',
 			name: 'provider',
 			type: 'string',
-			default: 'openai',
+			default: '',
 			description:
-				'DEPRECATED — kept so existing workflows keep working. Set the provider on the node instead; this value is only used when the node provider is empty',
+				'DEPRECATED — kept so existing workflows keep working. Set the provider on the node instead; this value is only read by the credential test, never filled in for an unconfigured node',
 		},
 		{
 			displayName: 'Model (Deprecated)',
